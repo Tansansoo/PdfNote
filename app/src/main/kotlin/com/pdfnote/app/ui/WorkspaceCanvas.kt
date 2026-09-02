@@ -19,7 +19,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
@@ -63,7 +62,6 @@ import kotlin.math.roundToInt
 
 private const val MIN_CANVAS_ZOOM = 0.3f
 private const val MAX_CANVAS_ZOOM = 4f
-private val CANVAS_EXTENT = 16000.dp
 private val NOTE_HEADER_HEIGHT = 22.dp
 
 /** 워크스페이스 캔버스의 상태: 항목 목록, 뷰 변환(이동/줌), 선택 */
@@ -168,28 +166,17 @@ fun WorkspaceCanvas(
             }
         }
 
-        // 변환이 적용되는 내용 레이어
-        Box(
-            Modifier
-                .requiredSize(CANVAS_EXTENT)
-                .graphicsLayer {
-                    translationX = state.offset.x
-                    translationY = state.offset.y
-                    scaleX = state.scale
-                    scaleY = state.scale
-                    transformOrigin = TransformOrigin(0f, 0f)
-                }
-        ) {
-            for (item in state.items) {
-                key(item.id) {
-                    WorkItemCard(
-                        item = item,
-                        state = state,
-                        density = density,
-                        loadImage = loadImage,
-                        onJump = onJump,
-                    )
-                }
+        // 카드들. 캔버스 이동/줌은 카드마다 개별 적용한다
+        // (거대한 단일 레이어는 고밀도 화면에서 Compose 크기 상한을 넘겨 앱이 죽는다)
+        for (item in state.items) {
+            key(item.id) {
+                WorkItemCard(
+                    item = item,
+                    state = state,
+                    density = density,
+                    loadImage = loadImage,
+                    onJump = onJump,
+                )
             }
         }
 
@@ -247,7 +234,18 @@ private fun WorkItemCard(
 
     Box(
         Modifier
-            .offset { IntOffset((item.x * density).roundToInt(), (item.y * density).roundToInt()) }
+            .offset {
+                val k = state.scale * density
+                IntOffset(
+                    (item.x * k + state.offset.x).roundToInt(),
+                    (item.y * k + state.offset.y).roundToInt(),
+                )
+            }
+            .graphicsLayer {
+                scaleX = state.scale
+                scaleY = state.scale
+                transformOrigin = TransformOrigin(0f, 0f)
+            }
             .width(item.width.dp)
     ) {
         Box(
@@ -282,7 +280,7 @@ private fun WorkItemCard(
             Box(
                 Modifier
                     .align(Alignment.TopEnd)
-                    .offset(x = 8.dp, y = (-8).dp)
+                    .offset(x = (-4).dp, y = 4.dp)
                     .size(24.dp)
                     .background(Color(0xFF444444), CircleShape)
                     .clickable { state.remove(item.id) },
