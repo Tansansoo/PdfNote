@@ -19,8 +19,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -248,12 +250,15 @@ private fun WorkItemCard(
                     (item.y * k + state.offset.y).roundToInt(),
                 )
             }
+            // 부모(캔버스 영역)의 크기 제한을 물려받지 않도록 무제한으로 측정한다.
+            // 그렇지 않으면 카드가 화면보다 커질 수 없고, 넘치는 부분이 잘려 보인다.
+            .wrapContentSize(Alignment.TopStart, unbounded = true)
             .graphicsLayer {
                 scaleX = state.scale
                 scaleY = state.scale
                 transformOrigin = TransformOrigin(0f, 0f)
             }
-            .width(item.width.dp)
+            .requiredWidth(item.width.dp)
     ) {
         Box(
             Modifier

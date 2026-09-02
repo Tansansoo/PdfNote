@@ -161,7 +161,7 @@ private fun LibraryCard(
         Box(
             Modifier
                 .fillMaxWidth()
-                .aspectRatio(0.75f)
+                .aspectRatio(1f / 1.414f) // A4 세로 비율
                 .background(Color(0xFFF0F0F0), RoundedCornerShape(4.dp)),
             contentAlignment = Alignment.Center,
         ) {
@@ -181,6 +181,7 @@ private fun LibraryCard(
         Text(
             entry.title,
             style = MaterialTheme.typography.titleSmall,
+            minLines = 2,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
         )
