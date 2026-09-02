@@ -1,6 +1,7 @@
 package com.pdfnote.app.ui
 
 import android.graphics.Bitmap
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -29,6 +30,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -44,8 +46,10 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.LayoutCoordinates
@@ -54,6 +58,11 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import com.pdfnote.app.ink.InkStore
+import com.pdfnote.app.ink.InkTools
+import com.pdfnote.app.ink.SurfaceTransform
+import com.pdfnote.app.ink.drawInk
+import com.pdfnote.app.ink.inkInput
 import com.pdfnote.app.model.Selection
 import com.pdfnote.app.pdf.MuPdfDocument
 import kotlinx.coroutines.delay
@@ -67,6 +76,9 @@ private const val MAX_ZOOM = 5f
 private const val MAX_RENDER_WIDTH_PX = 2600
 private val PAGE_GAP = 8.dp
 private val PAGE_MARGIN = 8.dp
+
+/** 페이지 필기 표면 키 */
+fun pageInkKey(pageIndex: Int) = "page:$pageIndex"
 
 /** 특정 페이지/영역으로 이동 요청. nonce는 같은 곳으로 다시 이동할 때도 효과가 재실행되게 한다. */
 data class JumpTarget(val pageIndex: Int, val rect: Rect?, val nonce: Long)
@@ -96,11 +108,14 @@ class ExcerptDragCallbacks(
  * - 한 손가락: 스크롤 (세로/가로)
  * - 두 손가락: 핀치 줌 (1x ~ 5x)
  * - 길게 누르고 끌기: 영역 선택 / 선택 영역 안에서 길게 누르고 끌기: 워크스페이스로 드래그
+ * - 필기 모드에서 S펜: 페이지 위에 필기
  */
 @Composable
 fun PdfViewer(
     doc: MuPdfDocument,
     state: PdfViewerState,
+    tools: InkTools,
+    ink: InkStore,
     dragCallbacks: ExcerptDragCallbacks,
     onSendSelection: (Selection) -> Unit,
     modifier: Modifier = Modifier,
@@ -110,6 +125,12 @@ fun PdfViewer(
     val hScroll = rememberScrollState()
     val scope = rememberCoroutineScope()
     val density = LocalDensity.current
+    val haptic = LocalHapticFeedback.current
+
+    // 화면에 놓인 페이지들의 위치 (필기 좌표 변환용)
+    val pageCoords = remember(doc) { mutableMapOf<Int, LayoutCoordinates>() }
+    var viewerCoords by remember { mutableStateOf<LayoutCoordinates?>(null) }
+    val eraserRadiusPx = with(density) { 14.dp.toPx() }
 
     BoxWithConstraints(modifier.background(Color(0xFFE8E8EC))) {
         val containerWidth = maxWidth
@@ -144,9 +165,30 @@ fun PdfViewer(
             if (state.jumpTarget === target) state.highlight = null
         }
 
+        // 뷰어 좌표 → 어느 페이지의 어느 위치인지 (필기용)
+        fun resolveInkSurface(pos: Offset): SurfaceTransform? {
+            val vc = viewerCoords ?: return null
+            for ((index, pc) in pageCoords) {
+                if (!pc.isAttached) continue
+                val b = vc.localBoundingBoxOf(pc, clipBounds = false)
+                if (b.contains(pos)) {
+                    val size = doc.pageSizes[index]
+                    return SurfaceTransform(
+                        key = pageInkKey(index),
+                        origin = b.topLeft,
+                        unitsPerPx = size.width / b.width,
+                        clip = Rect(0f, 0f, size.width, size.height),
+                    )
+                }
+            }
+            return null
+        }
+
         Box(
             Modifier
                 .fillMaxSize()
+                .onGloballyPositioned { viewerCoords = it }
+                .inkInput(tools, ink, eraserRadiusPx, haptic, ::resolveInkSurface)
                 .pinchZoom { zoomChange, centroid ->
                     val newZoom = (zoom * zoomChange).coerceIn(MIN_ZOOM, MAX_ZOOM)
                     val actual = newZoom / zoom
@@ -181,6 +223,8 @@ fun PdfViewer(
                         pageWidthPx = pageWidthPx,
                         selection = state.selection,
                         highlight = state.highlight,
+                        ink = ink,
+                        pageCoords = pageCoords,
                         onSelectionChange = { state.selection = it },
                         dragCallbacks = dragCallbacks,
                         onSend = onSendSelection,
@@ -213,6 +257,7 @@ private fun rectOf(a: Offset, b: Offset) =
 /**
  * 한 페이지. 렌더링이 끝날 때까지는 흰 바탕만 보여주고, 해상도가 바뀌면 이전 비트맵을 유지한 채 교체한다.
  * 길게 누르고 끌면 영역을 선택하고, 선택 영역 안에서 다시 길게 누르고 끌면 발췌 드래그가 시작된다.
+ * 페이지 위의 필기는 페이지 좌표(pt)로 저장되어 줌과 함께 확대된다.
  */
 @Composable
 private fun PdfPage(
@@ -222,6 +267,8 @@ private fun PdfPage(
     pageWidthPx: Float,
     selection: Selection?,
     highlight: Selection?,
+    ink: InkStore,
+    pageCoords: MutableMap<Int, LayoutCoordinates>,
     onSelectionChange: (Selection?) -> Unit,
     dragCallbacks: ExcerptDragCallbacks,
     onSend: (Selection) -> Unit,
@@ -231,6 +278,7 @@ private fun PdfPage(
     val pxPerPt = pageWidthPx / pageSize.width
     val density = LocalDensity.current
     val haptic = LocalHapticFeedback.current
+    val inkKey = pageInkKey(pageIndex)
 
     var bitmap by remember(doc, pageIndex) { mutableStateOf<Bitmap?>(null) }
     var coords by remember { mutableStateOf<LayoutCoordinates?>(null) }
@@ -243,6 +291,10 @@ private fun PdfPage(
             .onSuccess { bitmap = it }
     }
 
+    DisposableEffect(pageIndex, pageCoords) {
+        onDispose { pageCoords.remove(pageIndex) }
+    }
+
     val mySelection = selection?.takeIf { it.pageIndex == pageIndex }
     val myHighlight = highlight?.takeIf { it.pageIndex == pageIndex }
 
@@ -250,7 +302,10 @@ private fun PdfPage(
         modifier
             .shadow(2.dp, RoundedCornerShape(2.dp))
             .background(Color.White)
-            .onGloballyPositioned { coords = it }
+            .onGloballyPositioned {
+                coords = it
+                pageCoords[pageIndex] = it
+            }
             .pointerInput(pageIndex, pxPerPt) {
                 var anchor = Offset.Zero
                 var dragging = false
@@ -316,6 +371,16 @@ private fun PdfPage(
             )
         }
 
+        // 필기 (페이지 좌표 → 화면 px)
+        Canvas(Modifier.matchParentSize()) {
+            val strokes = ink.strokes(inkKey)
+            val current = if (ink.currentSurface == inkKey) ink.current else null
+            val cursor = ink.eraserCursor?.takeIf { it.surface == inkKey }
+            withTransform({ scale(pxPerPt, pxPerPt, Offset.Zero) }) {
+                drawInk(strokes, current, cursor)
+            }
+        }
+
         // 이동 후 강조 표시
         myHighlight?.let { h ->
             val r = h.rect
@@ -375,7 +440,7 @@ private fun PdfPage(
 /**
  * 두 손가락 핀치 줌 감지.
  * Initial 패스에서 두 손가락 이벤트를 먼저 가로채 소비하므로 LazyColumn 스크롤과 충돌하지 않는다.
- * 한 손가락 이벤트는 건드리지 않아 스크롤이 그대로 동작한다.
+ * 한 손가락 이벤트는 건드리지 않아 스크롤이 그대로 동작한다. 스타일러스가 섞인 경우는 무시한다.
  */
 private fun Modifier.pinchZoom(onZoom: (zoomChange: Float, centroid: Offset) -> Unit): Modifier =
     pointerInput(Unit) {
@@ -384,7 +449,7 @@ private fun Modifier.pinchZoom(onZoom: (zoomChange: Float, centroid: Offset) -> 
             do {
                 val event = awaitPointerEvent(PointerEventPass.Initial)
                 val pressed = event.changes.filter { it.pressed }
-                if (pressed.size >= 2) {
+                if (pressed.size >= 2 && pressed.none { it.type == PointerType.Stylus || it.type == PointerType.Eraser }) {
                     val zoomChange = event.calculateZoom()
                     val centroid = event.calculateCentroid(useCurrent = true)
                     if (zoomChange != 1f && centroid != Offset.Unspecified) {

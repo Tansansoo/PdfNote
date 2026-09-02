@@ -56,6 +56,8 @@ import androidx.compose.ui.unit.dp
 import com.pdfnote.app.data.LibraryEntry
 import com.pdfnote.app.data.LibraryStore
 import com.pdfnote.app.data.WorkspaceStore
+import com.pdfnote.app.ink.InkStore
+import com.pdfnote.app.ink.InkTools
 import com.pdfnote.app.model.ExcerptItem
 import com.pdfnote.app.model.NoteItem
 import com.pdfnote.app.model.Selection
@@ -63,6 +65,7 @@ import com.pdfnote.app.model.WorkItem
 import com.pdfnote.app.model.toRectF
 import com.pdfnote.app.pdf.MuPdfDocument
 import com.pdfnote.app.ui.ExcerptDragCallbacks
+import com.pdfnote.app.ui.InkToolbar
 import com.pdfnote.app.ui.LibraryScreen
 import com.pdfnote.app.ui.PdfViewer
 import com.pdfnote.app.ui.PdfViewerState
@@ -234,7 +237,7 @@ private data class DragPayload(
     val position: Offset, // 루트 좌표(px)
 )
 
-/** 뷰어 화면: 툴바 + (PDF | 워크스페이스) 분할 + 드래그 잔상 */
+/** 뷰어 화면: 툴바 + (PDF | 워크스페이스) 분할 + 드래그 잔상 + 필기 툴바 */
 @OptIn(FlowPreview::class)
 @Composable
 private fun ViewerScreen(
@@ -251,6 +254,8 @@ private fun ViewerScreen(
         WorkspaceState(onRemoved = { item -> if (item is ExcerptItem) store.deleteImage(item.id) })
     }
     val pdfState = remember(document) { PdfViewerState() }
+    val tools = remember { InkTools() }
+    val ink = remember(document) { InkStore() }
     var drag by remember { mutableStateOf<DragPayload?>(null) }
     var overlayOrigin by remember { mutableStateOf(Offset.Zero) }
 
@@ -271,6 +276,22 @@ private fun ViewerScreen(
         } finally {
             val snapshot: List<WorkItem> = workspace.items.toList()
             withContext(NonCancellable) { store.save(key, snapshot) }
+        }
+    }
+
+    // 문서별 필기 불러오기 + 저장
+    LaunchedEffect(document) {
+        val doc = document ?: return@LaunchedEffect
+        val key = doc.key
+        ink.replaceAll(store.loadInk(key))
+        try {
+            snapshotFlow { ink.revision }
+                .drop(1)
+                .debounce(600)
+                .collect { store.saveInk(key, ink.snapshot()) }
+        } finally {
+            val snapshot = ink.snapshot()
+            withContext(NonCancellable) { store.saveInk(key, snapshot) }
         }
     }
 
@@ -366,7 +387,8 @@ private fun ViewerScreen(
 
         Box(
             Modifier
-                .fillMaxSize()
+                .weight(1f)
+                .fillMaxWidth()
                 .onGloballyPositioned { overlayOrigin = it.positionInRoot() }
         ) {
             val doc = document
@@ -377,6 +399,8 @@ private fun ViewerScreen(
                         PdfViewer(
                             doc = doc,
                             state = pdfState,
+                            tools = tools,
+                            ink = ink,
                             dragCallbacks = dragCallbacks,
                             onSendSelection = { sel ->
                                 val center = workspace.viewportCenterDp(density)
@@ -390,6 +414,8 @@ private fun ViewerScreen(
                     second = { m ->
                         WorkspaceCanvas(
                             state = workspace,
+                            tools = tools,
+                            ink = ink,
                             loadImage = { item ->
                                 store.loadImage(item.id) ?: runCatching {
                                     val px = item.width * density * 2f / item.rect.width
@@ -441,6 +467,10 @@ private fun ViewerScreen(
             } else if (loading) {
                 CircularProgressIndicator(Modifier.align(Alignment.Center))
             }
+        }
+
+        if (document != null) {
+            InkToolbar(tools = tools, ink = ink)
         }
     }
 }

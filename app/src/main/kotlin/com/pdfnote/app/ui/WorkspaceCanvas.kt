@@ -47,16 +47,24 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedback
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.pdfnote.app.ink.InkStore
+import com.pdfnote.app.ink.InkTools
+import com.pdfnote.app.ink.SurfaceTransform
+import com.pdfnote.app.ink.drawInk
+import com.pdfnote.app.ink.inkInput
 import com.pdfnote.app.model.ExcerptItem
 import com.pdfnote.app.model.NoteItem
 import com.pdfnote.app.model.WorkItem
@@ -66,6 +74,7 @@ private const val MIN_CANVAS_ZOOM = 0.25f
 private const val MAX_CANVAS_ZOOM = 4f
 private val NOTE_HEADER_HEIGHT = 22.dp
 private val RESIZE_HANDLE = 28.dp
+const val CANVAS_INK_KEY = "canvas"
 
 /** 워크스페이스 캔버스의 상태: 항목 목록, 뷰 변환(이동/줌), 선택 */
 class WorkspaceState(private val onRemoved: (WorkItem) -> Unit = {}) {
@@ -133,18 +142,31 @@ class WorkspaceState(private val onRemoved: (WorkItem) -> Unit = {}) {
 @Composable
 fun WorkspaceCanvas(
     state: WorkspaceState,
+    tools: InkTools,
+    ink: InkStore,
     loadImage: suspend (ExcerptItem) -> Bitmap?,
     onJump: (ExcerptItem) -> Unit,
     dropHover: Boolean,
     modifier: Modifier = Modifier,
 ) {
     val density = LocalDensity.current.density
+    val haptic = LocalHapticFeedback.current
+    val eraserRadiusPx = 14.dp.value * density
 
     Box(
         modifier
             .clipToBounds()
             .background(Color(0xFFF4F1EA))
             .onGloballyPositioned { state.bounds = it.boundsInRoot() }
+            // 필기: 이동/줌 제스처보다 먼저 받아 S펜 입력만 소비한다
+            .inkInput(tools, ink, eraserRadiusPx, haptic) { _ ->
+                SurfaceTransform(
+                    key = CANVAS_INK_KEY,
+                    origin = state.offset,
+                    unitsPerPx = 1f / (state.scale * density),
+                    clip = null,
+                )
+            }
             .pointerInput(Unit) {
                 detectTransformGestures { centroid, pan, zoom, _ ->
                     val newScale = (state.scale * zoom).coerceIn(MIN_CANVAS_ZOOM, MAX_CANVAS_ZOOM)
@@ -186,6 +208,20 @@ fun WorkspaceCanvas(
                     loadImage = loadImage,
                     onJump = onJump,
                 )
+            }
+        }
+
+        // 필기 (캔버스 dp 좌표 → 화면 px). 카드 위에 그려진다
+        Canvas(Modifier.matchParentSize()) {
+            val strokes = ink.strokes(CANVAS_INK_KEY)
+            val current = if (ink.currentSurface == CANVAS_INK_KEY) ink.current else null
+            val cursor = ink.eraserCursor?.takeIf { it.surface == CANVAS_INK_KEY }
+            val k = state.scale * density
+            withTransform({
+                translate(state.offset.x, state.offset.y)
+                scale(k, k, Offset.Zero)
+            }) {
+                drawInk(strokes, current, cursor)
             }
         }
 
