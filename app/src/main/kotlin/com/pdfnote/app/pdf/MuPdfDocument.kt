@@ -1,16 +1,13 @@
 package com.pdfnote.app.pdf
 
-import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.RectF
-import android.net.Uri
-import android.provider.OpenableColumns
 import com.artifex.mupdf.fitz.Document
 import com.artifex.mupdf.fitz.Matrix
 import com.artifex.mupdf.fitz.android.AndroidDrawDevice
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.withContext
-import java.io.IOException
+import java.io.File
 import java.util.concurrent.Executors
 import kotlin.math.roundToInt
 
@@ -30,13 +27,14 @@ data class PageSize(
 /**
  * MuPDF Document를 감싸는 클래스.
  * MuPDF 객체는 스레드 안전하지 않으므로 모든 호출을 전용 단일 스레드에서 실행한다.
+ * @param key 문서를 식별하는 키 (워크스페이스 저장에 사용)
  */
 class MuPdfDocument private constructor(
     private val doc: Document,
     val pageCount: Int,
     val pageSizes: List<PageSize>,
     val displayName: String,
-    val uriString: String,
+    val key: String,
 ) {
     companion object {
         // 한 페이지를 렌더링할 때 허용하는 최대 픽셀 너비
@@ -47,36 +45,23 @@ class MuPdfDocument private constructor(
             Thread(r, "mupdf-worker")
         }.asCoroutineDispatcher()
 
-        suspend fun open(context: Context, uri: Uri): MuPdfDocument = withContext(mupdfDispatcher) {
-            val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-                ?: throw IOException("파일을 열 수 없습니다: $uri")
-            val doc = Document.openDocument(bytes, "pdf")
-            val count = doc.countPages()
-            val sizes = ArrayList<PageSize>(count)
-            for (i in 0 until count) {
-                val page = doc.loadPage(i)
-                try {
-                    val b = page.bounds
-                    sizes.add(PageSize(b.x1 - b.x0, b.y1 - b.y0, b.x0, b.y0))
-                } finally {
-                    page.destroy()
-                }
-            }
-            MuPdfDocument(doc, count, sizes, queryDisplayName(context, uri), uri.toString())
-        }
-
-        private fun queryDisplayName(context: Context, uri: Uri): String {
-            runCatching {
-                context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
-                    ?.use { c ->
-                        if (c.moveToFirst()) {
-                            val idx = c.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                            if (idx >= 0) return c.getString(idx) ?: ""
-                        }
+        /** 앱 저장소 안의 PDF 파일을 연다 */
+        suspend fun openFile(file: File, displayName: String, key: String): MuPdfDocument =
+            withContext(mupdfDispatcher) {
+                val doc = Document.openDocument(file.absolutePath)
+                val count = doc.countPages()
+                val sizes = ArrayList<PageSize>(count)
+                for (i in 0 until count) {
+                    val page = doc.loadPage(i)
+                    try {
+                        val b = page.bounds
+                        sizes.add(PageSize(b.x1 - b.x0, b.y1 - b.y0, b.x0, b.y0))
+                    } finally {
+                        page.destroy()
                     }
+                }
+                MuPdfDocument(doc, count, sizes, displayName, key)
             }
-            return uri.lastPathSegment ?: "document.pdf"
-        }
     }
 
     /**

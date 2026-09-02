@@ -60,9 +60,10 @@ import com.pdfnote.app.model.NoteItem
 import com.pdfnote.app.model.WorkItem
 import kotlin.math.roundToInt
 
-private const val MIN_CANVAS_ZOOM = 0.3f
+private const val MIN_CANVAS_ZOOM = 0.25f
 private const val MAX_CANVAS_ZOOM = 4f
 private val NOTE_HEADER_HEIGHT = 22.dp
+private val RESIZE_HANDLE = 28.dp
 
 /** 워크스페이스 캔버스의 상태: 항목 목록, 뷰 변환(이동/줌), 선택 */
 class WorkspaceState(private val onRemoved: (WorkItem) -> Unit = {}) {
@@ -95,6 +96,11 @@ class WorkspaceState(private val onRemoved: (WorkItem) -> Unit = {}) {
         if (i >= 0) items[i] = items[i].movedBy(dxDp, dyDp)
     }
 
+    fun resize(id: String, dWidthDp: Float) {
+        val i = items.indexOfFirst { it.id == id }
+        if (i >= 0) items[i] = items[i].withWidth(items[i].width + dWidthDp)
+    }
+
     fun remove(id: String) {
         val i = items.indexOfFirst { it.id == id }
         if (i >= 0) {
@@ -120,6 +126,7 @@ class WorkspaceState(private val onRemoved: (WorkItem) -> Unit = {}) {
  * 무한 캔버스 워크스페이스.
  * - 빈 곳 한 손가락 드래그: 이동 / 두 손가락: 줌
  * - 카드 드래그: 카드 이동 / 카드 탭: 선택 (발췌 카드는 원본 페이지로 이동)
+ * - 선택된 카드의 오른쪽 아래 손잡이: 크기 조절
  */
 @Composable
 fun WorkspaceCanvas(
@@ -220,14 +227,14 @@ private fun WorkItemCard(
     val current by rememberUpdatedState(item)
     val shape = RoundedCornerShape(6.dp)
 
-    // 카드 이동 제스처
+    // 카드 이동 제스처.
+    // graphicsLayer 배율은 포인터 좌표에 이미 반영되어 들어오므로 밀도로만 나눈다.
     val dragModifier = Modifier.pointerInput(item.id) {
         detectDragGestures(
             onDragStart = { state.selectedId = item.id },
             onDrag = { change, drag ->
                 change.consume()
-                val k = state.scale * density
-                state.move(item.id, drag.x / k, drag.y / k)
+                state.move(item.id, drag.x / density, drag.y / density)
             },
         )
     }
@@ -277,6 +284,7 @@ private fun WorkItemCard(
         }
 
         if (selected) {
+            // 삭제
             Box(
                 Modifier
                     .align(Alignment.TopEnd)
@@ -287,6 +295,27 @@ private fun WorkItemCard(
                 contentAlignment = Alignment.Center,
             ) {
                 Text("✕", color = Color.White, fontSize = 13.sp)
+            }
+            // 크기 조절 손잡이
+            Box(
+                Modifier
+                    .align(Alignment.BottomEnd)
+                    .size(RESIZE_HANDLE)
+                    .pointerInput(item.id) {
+                        detectDragGestures { change, drag ->
+                            change.consume()
+                            state.resize(item.id, drag.x / density)
+                        }
+                    },
+                contentAlignment = Alignment.BottomEnd,
+            ) {
+                Box(
+                    Modifier
+                        .padding(3.dp)
+                        .size(16.dp)
+                        .background(Color(0xFF2F6FE0), RoundedCornerShape(3.dp))
+                        .border(2.dp, Color.White, RoundedCornerShape(3.dp))
+                )
             }
         }
     }

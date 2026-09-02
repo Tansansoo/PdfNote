@@ -10,13 +10,17 @@ data class Selection(val pageIndex: Int, val rect: Rect)
 
 fun Rect.toRectF(): RectF = RectF(left, top, right, bottom)
 
-/** 워크스페이스 캔버스에 놓이는 항목. x, y, width는 캔버스 좌표(dp, 줌 1배 기준) */
+const val MIN_CARD_WIDTH = 80f
+const val MAX_CARD_WIDTH = 1600f
+
+/** 워크스페이스 캔버스에 놓이는 항목. x, y, width는 캔버스 좌표(dp, 줌 1배 기준). 음수 좌표도 허용 */
 sealed interface WorkItem {
     val id: String
     val x: Float
     val y: Float
     val width: Float
     fun movedBy(dx: Float, dy: Float): WorkItem
+    fun withWidth(newWidth: Float): WorkItem
 }
 
 /** PDF에서 발췌한 영역 카드. 탭하면 원본 페이지로 이동한다. */
@@ -31,8 +35,8 @@ data class ExcerptItem(
 ) : WorkItem {
     val aspect: Float get() = (rect.height / rect.width).coerceIn(0.05f, 20f)
     val height: Float get() = width * aspect
-    override fun movedBy(dx: Float, dy: Float) =
-        copy(x = (x + dx).coerceAtLeast(0f), y = (y + dy).coerceAtLeast(0f))
+    override fun movedBy(dx: Float, dy: Float) = copy(x = x + dx, y = y + dy)
+    override fun withWidth(newWidth: Float) = copy(width = newWidth.coerceIn(MIN_CARD_WIDTH, MAX_CARD_WIDTH))
 }
 
 /** 직접 입력하는 텍스트 메모 카드 */
@@ -43,8 +47,8 @@ data class NoteItem(
     override val y: Float,
     override val width: Float,
 ) : WorkItem {
-    override fun movedBy(dx: Float, dy: Float) =
-        copy(x = (x + dx).coerceAtLeast(0f), y = (y + dy).coerceAtLeast(0f))
+    override fun movedBy(dx: Float, dy: Float) = copy(x = x + dx, y = y + dy)
+    override fun withWidth(newWidth: Float) = copy(width = newWidth.coerceIn(120f, MAX_CARD_WIDTH))
 }
 
 /** 워크스페이스 저장 형식 (JSON) */
