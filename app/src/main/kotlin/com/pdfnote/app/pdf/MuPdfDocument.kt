@@ -2,6 +2,7 @@ package com.pdfnote.app.pdf
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.RectF
 import android.net.Uri
 import android.provider.OpenableColumns
 import com.artifex.mupdf.fitz.Document
@@ -11,9 +12,18 @@ import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.withContext
 import java.io.IOException
 import java.util.concurrent.Executors
+import kotlin.math.roundToInt
 
-/** PDF 한 페이지의 크기 (PDF 포인트 단위, 72pt = 1inch) */
-data class PageSize(val width: Float, val height: Float) {
+/**
+ * PDF 한 페이지의 크기 (PDF 포인트 단위, 72pt = 1inch).
+ * originX/originY는 MuPDF 페이지 경계의 좌상단 좌표 (보통 0,0).
+ */
+data class PageSize(
+    val width: Float,
+    val height: Float,
+    val originX: Float = 0f,
+    val originY: Float = 0f,
+) {
     val aspect: Float get() = height / width
 }
 
@@ -26,8 +36,12 @@ class MuPdfDocument private constructor(
     val pageCount: Int,
     val pageSizes: List<PageSize>,
     val displayName: String,
+    val uriString: String,
 ) {
     companion object {
+        // 한 페이지를 렌더링할 때 허용하는 최대 픽셀 너비
+        private const val MAX_PAGE_PX = 3000f
+
         // MuPDF 전용 스레드
         private val mupdfDispatcher = Executors.newSingleThreadExecutor { r ->
             Thread(r, "mupdf-worker")
@@ -43,12 +57,12 @@ class MuPdfDocument private constructor(
                 val page = doc.loadPage(i)
                 try {
                     val b = page.bounds
-                    sizes.add(PageSize(b.x1 - b.x0, b.y1 - b.y0))
+                    sizes.add(PageSize(b.x1 - b.x0, b.y1 - b.y0, b.x0, b.y0))
                 } finally {
                     page.destroy()
                 }
             }
-            MuPdfDocument(doc, count, sizes, queryDisplayName(context, uri))
+            MuPdfDocument(doc, count, sizes, queryDisplayName(context, uri), uri.toString())
         }
 
         private fun queryDisplayName(context: Context, uri: Uri): String {
@@ -78,6 +92,74 @@ class MuPdfDocument private constructor(
         } finally {
             page.destroy()
         }
+    }
+
+    /**
+     * 페이지의 일부 영역만 렌더링한다.
+     * @param rect 페이지 좌상단 기준 영역 (PDF 포인트)
+     * @param pxPerPt 1pt당 픽셀 수 (해상도)
+     */
+    suspend fun renderRegion(pageIndex: Int, rect: RectF, pxPerPt: Float): Bitmap = withContext(mupdfDispatcher) {
+        val size = pageSizes[pageIndex]
+        val scale = pxPerPt.coerceIn(0.5f, MAX_PAGE_PX / size.width)
+        val page = doc.loadPage(pageIndex)
+        try {
+            val full = AndroidDrawDevice.drawPage(page, Matrix.Scale(scale))
+            val x = (rect.left * scale).roundToInt().coerceIn(0, full.width - 1)
+            val y = (rect.top * scale).roundToInt().coerceIn(0, full.height - 1)
+            val w = (rect.width() * scale).roundToInt().coerceIn(1, full.width - x)
+            val h = (rect.height() * scale).roundToInt().coerceIn(1, full.height - y)
+            val cropped = Bitmap.createBitmap(full, x, y, w, h)
+            if (cropped !== full) full.recycle()
+            cropped
+        } finally {
+            page.destroy()
+        }
+    }
+
+    /**
+     * 영역 안에 들어 있는 글자를 읽기 순서대로 추출한다. 실패하면 빈 문자열.
+     * @param rect 페이지 좌상단 기준 영역 (PDF 포인트)
+     */
+    suspend fun extractText(pageIndex: Int, rect: RectF): String = withContext(mupdfDispatcher) {
+        runCatching {
+            val size = pageSizes[pageIndex]
+            // MuPDF 절대 좌표로 변환
+            val left = rect.left + size.originX
+            val top = rect.top + size.originY
+            val right = rect.right + size.originX
+            val bottom = rect.bottom + size.originY
+            val page = doc.loadPage(pageIndex)
+            try {
+                val st = page.toStructuredText()
+                try {
+                    val sb = StringBuilder()
+                    for (block in st.blocks) {
+                        for (line in block.lines) {
+                            val b = line.bbox
+                            val cy = (b.y0 + b.y1) / 2f
+                            if (cy < top || cy > bottom || b.x1 <= left || b.x0 >= right) continue
+                            val lineText = StringBuilder()
+                            for (ch in line.chars) {
+                                val q = ch.quad
+                                val cx = (q.ll_x + q.lr_x) / 2f
+                                if (cx >= left && cx <= right) lineText.appendCodePoint(ch.c)
+                            }
+                            val t = lineText.toString().trim()
+                            if (t.isNotEmpty()) {
+                                if (sb.isNotEmpty()) sb.append('\n')
+                                sb.append(t)
+                            }
+                        }
+                    }
+                    sb.toString()
+                } finally {
+                    st.destroy()
+                }
+            } finally {
+                page.destroy()
+            }
+        }.getOrDefault("")
     }
 
     suspend fun close() = withContext(mupdfDispatcher) {
