@@ -1,0 +1,31 @@
+# PdfNote
+
+LiquidText 스타일의 안드로이드 PDF 노트 앱. (개발 진행 중)
+
+## 현재 단계: 1단계 — PDF 뷰어
+- PDF 열기 (파일 선택, 또는 파일 관리자에서 "PdfNote로 열기")
+- 세로 스크롤, 두 손가락 핀치 줌 (1~5배), 페이지 번호 표시
+- 마지막으로 연 파일 자동으로 다시 열기
+
+다음 단계: 워크스페이스 캔버스 → S펜 필기 → 텍스트/그림 드래그 앤 드롭 발췌 → 발췌 카드 탭 시 원본 페이지로 이동
+
+## APK 만드는 법 (GitHub Actions, 컴퓨터에 설치할 것 없음)
+
+1. https://github.com 에서 계정을 만들고 로그인합니다.
+2. 오른쪽 위 **+** → **New repository** → 이름은 `PdfNote`, **Public** 선택 → **Create repository**.
+3. 만들어진 빈 저장소 화면에서 **uploading an existing file** 링크를 누릅니다.
+4. 이 압축 파일을 푼 뒤, 폴더 **안의 내용물 전부**(`.github`, `app`, `gradle`, `build.gradle.kts` 등)를 브라우저 창으로 드래그해서 올립니다.
+   - Mac에서는 `.github` 폴더가 숨겨져 있습니다. Finder에서 `Cmd + Shift + .` 을 눌러 숨김 파일을 보이게 한 뒤 올리세요.
+   - `.github/workflows/build.yml` 이 올라가지 않으면 자동 빌드가 실행되지 않습니다.
+5. 아래 **Commit changes** 를 누릅니다.
+6. 저장소 상단 **Actions** 탭에서 빌드가 도는 것을 확인합니다. 첫 빌드는 5~10분 걸립니다.
+7. 초록색 체크가 뜨면 저장소 첫 화면 오른쪽 **Releases** → **PdfNote (latest build)** → `PdfNote.apk` 를 태블릿 브라우저에서 눌러 다운로드합니다.
+8. 태블릿에서 다운로드한 APK를 열어 설치합니다. "출처를 알 수 없는 앱" 허용을 물어보면 허용합니다.
+
+이후 코드가 갱신될 때마다 바뀐 파일만 다시 올리면 자동으로 새 APK가 만들어집니다.
+
+## Android Studio로 직접 빌드하는 경우
+Android Studio에서 이 폴더를 열고 (File → Open) 실행 버튼을 누르면 됩니다. 태블릿은 USB 디버깅을 켜고 연결하세요.
+
+## 라이선스 참고
+PDF 렌더링에 MuPDF(AGPL)를 사용합니다. 개인 용도로 쓰는 데는 문제가 없습니다.
