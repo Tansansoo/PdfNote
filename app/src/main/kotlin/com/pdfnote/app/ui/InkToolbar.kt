@@ -21,6 +21,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -35,6 +39,9 @@ import com.pdfnote.app.ink.InkTools
 /** 필기 툴바: 도구 선택 + 도구별 옵션 + 되돌리기 */
 @Composable
 fun InkToolbar(tools: InkTools, ink: InkStore, modifier: Modifier = Modifier) {
+    // 색 선택 창을 어느 도구용으로 열었는지 (null이면 닫힘)
+    var pickerFor by remember { mutableStateOf<InkMode?>(null) }
+
     Column(modifier.fillMaxWidth().background(Color(0xFFF7F7F9))) {
         HorizontalDivider(color = Color(0xFFE0E0E4))
 
@@ -71,42 +78,16 @@ fun InkToolbar(tools: InkTools, ink: InkStore, modifier: Modifier = Modifier) {
                     color = Color(0xFF8A8A8A),
                     fontSize = 12.sp,
                 )
-                InkMode.PEN -> {
-                    FilterChip(
-                        selected = tools.straightLine,
-                        onClick = { tools.straightLine = !tools.straightLine },
-                        label = { Text("직선") },
-                    )
-                    for (c in InkTools.PEN_COLORS) {
-                        ColorDot(c, selected = tools.penColor == c) { tools.penColor = c }
-                    }
-                    InkTools.PEN_WIDTHS.forEachIndexed { i, w ->
-                        FilterChip(
-                            selected = tools.penWidth == w,
-                            onClick = { tools.penWidth = w },
-                            label = { Text(InkTools.WIDTH_LABELS[i]) },
-                        )
-                    }
-                    FingerChip(tools)
-                }
-                InkMode.HIGHLIGHTER -> {
-                    FilterChip(
-                        selected = tools.straightLine,
-                        onClick = { tools.straightLine = !tools.straightLine },
-                        label = { Text("직선") },
-                    )
-                    for (c in InkTools.HIGHLIGHTER_COLORS) {
-                        ColorDot(c, selected = tools.highlighterColor == c) { tools.highlighterColor = c }
-                    }
-                    InkTools.HIGHLIGHTER_WIDTHS.forEachIndexed { i, w ->
-                        FilterChip(
-                            selected = tools.highlighterWidth == w,
-                            onClick = { tools.highlighterWidth = w },
-                            label = { Text(InkTools.WIDTH_LABELS[i]) },
-                        )
-                    }
-                    FingerChip(tools)
-                }
+                InkMode.PEN -> PenOptions(
+                    tools = tools,
+                    highlighter = false,
+                    onOpenPicker = { pickerFor = InkMode.PEN },
+                )
+                InkMode.HIGHLIGHTER -> PenOptions(
+                    tools = tools,
+                    highlighter = true,
+                    onOpenPicker = { pickerFor = InkMode.HIGHLIGHTER },
+                )
                 InkMode.ERASER -> {
                     FilterChip(
                         selected = tools.eraserMode == EraserMode.STROKE,
@@ -123,6 +104,64 @@ fun InkToolbar(tools: InkTools, ink: InkStore, modifier: Modifier = Modifier) {
             }
         }
     }
+
+    pickerFor?.let { mode ->
+        val highlighter = mode == InkMode.HIGHLIGHTER
+        ColorPickerDialog(
+            title = if (highlighter) "형광펜 색" else "펜 색",
+            initial = if (highlighter) tools.highlighterColor else tools.penColor,
+            palette = tools.paletteFor(highlighter),
+            onPick = { c ->
+                if (highlighter) tools.highlighterColor = c else tools.penColor = c
+                pickerFor = null
+            },
+            onSaveToPalette = { c -> tools.addToPalette(highlighter, c) },
+            onRemoveFromPalette = { c -> tools.removeFromPalette(highlighter, c) },
+            onDismiss = { pickerFor = null },
+        )
+    }
+}
+
+/** 펜/형광펜 공통 옵션: 직선, 색(기본 + 저장한 색 + 추가), 굵기, 손가락 필기 */
+@Composable
+private fun PenOptions(tools: InkTools, highlighter: Boolean, onOpenPicker: () -> Unit) {
+    val current = if (highlighter) tools.highlighterColor else tools.penColor
+    val defaults = if (highlighter) InkTools.HIGHLIGHTER_COLORS else InkTools.PEN_COLORS
+    val widths = if (highlighter) InkTools.HIGHLIGHTER_WIDTHS else InkTools.PEN_WIDTHS
+    val currentWidth = if (highlighter) tools.highlighterWidth else tools.penWidth
+    fun setColor(c: Long) {
+        if (highlighter) tools.highlighterColor = c else tools.penColor = c
+    }
+
+    FilterChip(
+        selected = tools.straightLine,
+        onClick = { tools.straightLine = !tools.straightLine },
+        label = { Text("직선") },
+    )
+    for (c in defaults) {
+        ColorDot(c, selected = current == c) { setColor(c) }
+    }
+    val palette = tools.paletteFor(highlighter)
+    if (palette.isNotEmpty()) {
+        VerticalDivider(Modifier.height(22.dp), color = Color(0xFFD0D0D4))
+        for (c in palette) {
+            ColorDot(c, selected = current == c) { setColor(c) }
+        }
+    }
+    // 현재 색이 목록에 없으면(색상환으로 고른 색) 그 색도 보여준다
+    if (current !in defaults && current !in palette) {
+        ColorDot(current, selected = true) { }
+    }
+    AddColorButton(onClick = onOpenPicker)
+    VerticalDivider(Modifier.height(22.dp), color = Color(0xFFD0D0D4))
+    widths.forEachIndexed { i, w ->
+        FilterChip(
+            selected = currentWidth == w,
+            onClick = { if (highlighter) tools.highlighterWidth = w else tools.penWidth = w },
+            label = { Text(InkTools.WIDTH_LABELS[i]) },
+        )
+    }
+    FingerChip(tools)
 }
 
 @Composable
@@ -157,4 +196,19 @@ private fun ColorDot(color: Long, selected: Boolean, onClick: () -> Unit) {
             )
             .clickable(onClick = onClick),
     )
+}
+
+@Composable
+private fun AddColorButton(onClick: () -> Unit) {
+    Box(
+        Modifier
+            .size(30.dp)
+            .clip(CircleShape)
+            .background(Color.White)
+            .border(1.dp, Color(0xFF9A9AA3), CircleShape)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text("+", color = Color(0xFF555555), fontSize = 18.sp)
+    }
 }

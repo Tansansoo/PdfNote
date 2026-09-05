@@ -56,6 +56,7 @@ import androidx.compose.ui.unit.dp
 import com.pdfnote.app.data.LibraryEntry
 import com.pdfnote.app.data.LibraryStore
 import com.pdfnote.app.data.WorkspaceStore
+import com.pdfnote.app.ink.InkPrefs
 import com.pdfnote.app.ink.InkStore
 import com.pdfnote.app.ink.InkTools
 import com.pdfnote.app.model.ExcerptItem
@@ -249,13 +250,21 @@ private fun ViewerScreen(
 ) {
     val scope = rememberCoroutineScope()
     val density = LocalDensity.current.density
+    val context = LocalContext.current
 
     val workspace = remember {
         WorkspaceState(onRemoved = { item -> if (item is ExcerptItem) store.deleteImage(item.id) })
     }
     val pdfState = remember(document) { PdfViewerState() }
-    val tools = remember { InkTools() }
+    val tools = remember { InkTools().also { t -> InkPrefs.load(context)?.let(t::restore) } }
     val ink = remember(document) { InkStore() }
+
+    // 도구 설정(색, 굵기, 팔레트 등)이 바뀌면 저장
+    LaunchedEffect(tools) {
+        snapshotFlow { tools.saved() }
+            .drop(1)
+            .collect { InkPrefs.save(context, it) }
+    }
     var drag by remember { mutableStateOf<DragPayload?>(null) }
     var overlayOrigin by remember { mutableStateOf(Offset.Zero) }
 
